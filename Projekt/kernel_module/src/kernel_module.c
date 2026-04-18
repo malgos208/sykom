@@ -1,27 +1,27 @@
 #include <linux/module.h>
 #include <linux/kernel.h>
 #include <linux/ioport.h>
-#include <asm/errno.h>
-#include <asm/io.h>
 #include <linux/proc_fs.h>
 #include <linux/uaccess.h>
+#include <linux/io.h>
 #include <linux/slab.h>
 #include <linux/string.h>
 #include <linux/ctype.h>
 #include <linux/delay.h>
+#include <linux/math64.h>
+#include <linux/fs.h>
 
 MODULE_INFO(intree, "Y");
 MODULE_LICENSE("GPL");
-MODULE_AUTHOR("Malgorzata Stypa");
+MODULE_AUTHOR("Student SYKOM");
 MODULE_DESCRIPTION("GPIO EMU multiplier procfs driver");
 MODULE_VERSION("1.0");
 
-#define SYKT_GPIO_BASE_ADDR (0x00100000)
-#define SYKT_GPIO_SIZE      (0x8000)
-#define SYKT_EXIT           (0x3333)
-#define SYKT_EXIT_CODE      (0x7F)
+#define SYKT_GPIO_BASE_ADDR   0x00100000
+#define SYKT_GPIO_SIZE        0x8000
+#define SYKT_EXIT             0x3333
+#define SYKT_EXIT_CODE        0x7F
 
-// Offsety rejestrów (zgodne z Verilogiem)
 #define REG_ARG1_H    0x100
 #define REG_ARG1_L    0x108
 #define REG_ARG2_H    0x0F0
@@ -32,30 +32,26 @@ MODULE_VERSION("1.0");
 #define REG_RESULT_L  0x0E0
 #define REG_FINISHER  0x0000
 
-// Bity statusu
 #define STATUS_BUSY         0x01
 #define STATUS_DONE         0x02
 #define STATUS_ERROR        0x04
 #define STATUS_INVALID_ARG  0x08
 
-// Definicje formatu 64-bit
 #define EXP_BITS          27
 #define MANT_BITS         36
 #define EXP_BIAS          ((1ULL << (EXP_BITS - 1)) - 1)
 #define MANT_MASK         ((1ULL << MANT_BITS) - 1)
 #define HIDDEN_BIT        (1ULL << MANT_BITS)
 
-void __iomem *baseptr;
+static void __iomem *baseptr;
 static struct proc_dir_entry *proc_dir;
 static struct proc_dir_entry *proc_a1, *proc_a2, *proc_res, *proc_stat, *proc_ctrl;
 
 // ----------------------------------------------------------------------
 // Konwersja stringu naukowego na 64-bitowy format zmiennoprzecinkowy
-// Obsługuje format: [sign]d.dddde[sign]dd
 // ----------------------------------------------------------------------
 static int parse_scientific(const char *str, u64 *val)
 {
-    char *endptr;
     int sign = 0;
     u64 mantissa = 0;
     int exponent = 0;
@@ -201,14 +197,11 @@ static int format_scientific(u64 val, char *buf, size_t len)
     }
 
     char fmt_buf[64];
-    int pos = 0;
-    if (sign) fmt_buf[pos++] = '-';
-
-    u64 int_part = dec_mant;
-    pos += snprintf(fmt_buf + pos, sizeof(fmt_buf) - pos, "%llu", int_part);
-    fmt_buf[pos++] = '.';
-    fmt_buf[pos++] = '0';
-    pos += snprintf(fmt_buf + pos, sizeof(fmt_buf) - pos, "e%d", dec_exp);
+    if (sign) {
+        snprintf(fmt_buf, sizeof(fmt_buf), "-%llu.0e%d", dec_mant, dec_exp);
+    } else {
+        snprintf(fmt_buf, sizeof(fmt_buf), "%llu.0e%d", dec_mant, dec_exp);
+    }
 
     snprintf(buf, len, "%s", fmt_buf);
     return 0;
@@ -262,7 +255,7 @@ static ssize_t ctstma_write(struct file *filp, const char __user *ubuf,
     if (kstrtou32(kbuf, 10, &cmd)) return -EINVAL;
     if (cmd == 1) {
         u32 stat = readl(baseptr + REG_STATUS);
-        if (!(stat & STAT_BUSY)) {
+        if (!(stat & STATUS_BUSY)) {
             writel(1, baseptr + REG_CTRL);
         }
     }
@@ -278,11 +271,11 @@ static ssize_t ststma_read(struct file *filp, char __user *ubuf,
     char buf[32];
     u32 stat = readl(baseptr + REG_STATUS);
     int len;
-    if (stat & STAT_BUSY)
+    if (stat & STATUS_BUSY)
         len = snprintf(buf, sizeof(buf), "busy\n");
-    else if (stat & STAT_DONE)
+    else if (stat & STATUS_DONE)
         len = snprintf(buf, sizeof(buf), "done\n");
-    else if (stat & STAT_ERROR)
+    else if (stat & STATUS_ERROR)
         len = snprintf(buf, sizeof(buf), "error\n");
     else
         len = snprintf(buf, sizeof(buf), "idle\n");
@@ -298,7 +291,7 @@ static ssize_t restma_read(struct file *filp, char __user *ubuf,
     char buf[64];
     u32 stat = readl(baseptr + REG_STATUS);
     int len;
-    if (!(stat & STAT_DONE)) {
+    if (!(stat & STATUS_DONE)) {
         len = snprintf(buf, sizeof(buf), "not ready\n");
     } else {
         u32 hi = readl(baseptr + REG_RESULT_H);
@@ -313,22 +306,22 @@ static ssize_t restma_read(struct file *filp, char __user *ubuf,
 }
 
 // ----------------------------------------------------------------------
-// Struktury file_operations dla procfs
+// Struktury file_operations dla procfs (starsze API jądra)
 // ----------------------------------------------------------------------
-static const struct proc_ops a1_ops = {
-    .proc_write = a1stma_write,
+static const struct file_operations a1_ops = {
+    .write = a1stma_write,
 };
-static const struct proc_ops a2_ops = {
-    .proc_write = a2stma_write,
+static const struct file_operations a2_ops = {
+    .write = a2stma_write,
 };
-static const struct proc_ops ctrl_ops = {
-    .proc_write = ctstma_write,
+static const struct file_operations ctrl_ops = {
+    .write = ctstma_write,
 };
-static const struct proc_ops stat_ops = {
-    .proc_read = ststma_read,
+static const struct file_operations STATUS_ops = {
+    .read = ststma_read,
 };
-static const struct proc_ops res_ops = {
-    .proc_read = restma_read,
+static const struct file_operations res_ops = {
+    .read = restma_read,
 };
 
 // ----------------------------------------------------------------------
@@ -353,7 +346,7 @@ static int __init my_init_module(void)
     proc_a1   = proc_create("a1stma", 0220, proc_dir, &a1_ops);
     proc_a2   = proc_create("a2stma", 0220, proc_dir, &a2_ops);
     proc_ctrl = proc_create("ctstma", 0220, proc_dir, &ctrl_ops);
-    proc_stat = proc_create("ststma", 0444, proc_dir, &stat_ops);
+    proc_stat = proc_create("ststma", 0444, proc_dir, &STATUS_ops);
     proc_res  = proc_create("restma",  0444, proc_dir, &res_ops);
 
     if (!proc_a1 || !proc_a2 || !proc_ctrl || !proc_stat || !proc_res) {

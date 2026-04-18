@@ -188,9 +188,9 @@ always @(posedge clk or negedge n_reset) begin
             S_IDLE: begin
                 if (ctrl_reg[0]) begin
                     if ((e1 == 0 && m1 == 0) || (e2 == 0 && m2 == 0)) begin
-                        status_reg <= STAT_INVALID_ARG | STAT_ERROR;
+                        status_reg <= STATUS_INVALID_ARG | STATUS_ERROR;
                     end else begin
-                        status_reg <= STAT_BUSY;
+                        status_reg <= STATUS_BUSY;
                     end
                 end
             end
@@ -205,7 +205,7 @@ always @(posedge clk or negedge n_reset) begin
                 end
                 res_mant = product[71:36];
                 {res_h, res_l} = {res_sign, res_exp, res_mant};
-                status_reg <= STAT_DONE;
+                status_reg <= STATUS_DONE;
             end
 
             S_DONE: begin
