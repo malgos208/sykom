@@ -120,7 +120,7 @@ always @(negedge n_reset) begin
         res_h  <= 0; res_l  <= 0;
         ctrl_reg <= 0;
         status_reg <= 0;
-        state <= IDLE;
+        state <= S_IDLE;
         sdata_out <= 0;
     end
 end
