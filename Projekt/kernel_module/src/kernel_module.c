@@ -49,6 +49,7 @@ static struct proc_dir_entry *proc_a1, *proc_a2, *proc_ctrl, *proc_stat, *proc_r
 // ----------------------------------------------------------------------
 // Parser notacji naukowej -> u64 w formacie własnym
 // ----------------------------------------------------------------------
+
 static int parse_scientific(const char *buf, u64 *val)
 {
     const char *p = buf;
@@ -57,16 +58,17 @@ static int parse_scientific(const char *buf, u64 *val)
     int exp10 = 0;
     int frac_digits = 0;
 
+    // Białe znaki i znak liczby
     while (isspace(*p)) p++;
     if (*p == '-') { sign = 1; p++; }
     else if (*p == '+') p++;
 
+    // Część całkowita i ułamkowa jako jedna liczba całkowita
     if (!isdigit(*p)) return -EINVAL;
     while (isdigit(*p)) {
         mant = mant * 10 + (*p - '0');
         p++;
     }
-
     if (*p == '.') {
         p++;
         while (isdigit(*p)) {
@@ -76,6 +78,7 @@ static int parse_scientific(const char *buf, u64 *val)
         }
     }
 
+    // Wykładnik dziesiętny
     if (*p == 'e' || *p == 'E') {
         int exp_sign = 1;
         p++;
@@ -99,22 +102,20 @@ static int parse_scientific(const char *buf, u64 *val)
         return 0;
     }
 
+    // Uproszczona konwersja eksponentu: e2 ≈ exp10 * 3
+    int e2 = (exp10 << 1) + exp10;  // 3 * exp10
+
+    // Normalizacja mantysy tylko o 1 bit (jeśli konieczne)
     u64 m = mant;
-    int e2 = 0;
-    int e10 = exp10;
-
-    while (e10 > 0) {
-        if (m > (U64_MAX / 10)) { m >>= 1; e2++; }
-        m *= 10;
-        e10--;
+    int shift = 0;
+    if (m >= (HIDDEN_BIT << 1)) {
+        m >>= 1;
+        shift = 1;
+    } else if (m < HIDDEN_BIT) {
+        m <<= 1;
+        shift = -1;
     }
-    while (e10 < 0) {
-        m = (m + 5) / 10;
-        e10++;
-    }
-
-    while (m >= (HIDDEN_BIT << 1)) { m >>= 1; e2++; }
-    while (m < HIDDEN_BIT)        { m <<= 1; e2--; }
+    e2 += shift;
 
     int exp_final = e2 + EXP_BIAS;
     if (exp_final <= 0) { *val = 0; return 0; }
@@ -122,6 +123,7 @@ static int parse_scientific(const char *buf, u64 *val)
         exp_final = (1 << EXP_BITS) - 1;
         m = 0;
     }
+
     m &= MANT_MASK;
     *val = ((u64)sign << 63) | ((u64)exp_final << MANT_BITS) | m;
     return 0;
