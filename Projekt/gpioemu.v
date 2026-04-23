@@ -12,7 +12,7 @@ module gpioemu(
     input [31:0] gpio_in,
     input gpio_latch,
     output [31:0] gpio_out,
-    input [31:0] gpio_in_s_insp
+    output [31:0] gpio_in_s_insp     // <-- poprawione na output
 );
 
     reg [31:0] gpio_in_s  /* verilator public_flat_rw */;
@@ -42,7 +42,7 @@ module gpioemu(
     // Pola 1. liczby (format: 1 znak, 27 exp, 36 mantysa)
     wire        s1 = a[63];
     wire [26:0] e1 = a[62:36];
-    wire [35:0] m1 = {1'b1, a[34:0]};      // ukryta jedynka, mantysa 36 bitów
+    wire [35:0] m1 = {1'b1, a[34:0]};      // ukryta jedynka
 
     // Pola 2. liczby
     wire        s2 = b[63];
