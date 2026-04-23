@@ -7,6 +7,7 @@
 #include <linux/string.h>
 #include <linux/ctype.h>
 #include <linux/delay.h>
+#include <linux/math64.h>
 
 MODULE_INFO(intree, "Y");
 MODULE_LICENSE("GPL");
@@ -19,7 +20,6 @@ MODULE_VERSION("1.0");
 #define SYKT_EXIT             0x3333
 #define SYKT_EXIT_CODE        0x7F
 
-// Offsety rejestrów
 #define OFF_ARG1_H  0x100
 #define OFF_ARG1_L  0x108
 #define OFF_ARG2_H  0x0F0
@@ -29,13 +29,11 @@ MODULE_VERSION("1.0");
 #define OFF_RES_H   0x0D8
 #define OFF_RES_L   0x0E0
 
-// Bity statusu (zgodne z Verilogiem)
 #define STATUS_BUSY          0x01
 #define STATUS_DONE          0x02
 #define STATUS_ERROR         0x04
 #define STATUS_INVALID_ARG   0x08
 
-// Definicje formatu 64-bit (27b exp, 36b mantysa)
 #define EXP_BITS    27
 #define MANT_BITS   36
 #define EXP_BIAS    ((1ULL << (EXP_BITS-1)) - 1)
@@ -46,9 +44,6 @@ static void __iomem *baseptr;
 static struct proc_dir_entry *proc_dir;
 static struct proc_dir_entry *proc_a1, *proc_a2, *proc_ctrl, *proc_stat, *proc_res;
 
-// ----------------------------------------------------------------------
-// Parser notacji naukowej -> u64 w formacie własnym
-// ----------------------------------------------------------------------
 static int parse_scientific(const char *buf, u64 *val)
 {
     const char *p = buf;
@@ -57,12 +52,10 @@ static int parse_scientific(const char *buf, u64 *val)
     int exp10 = 0;
     int frac_digits = 0;
 
-    // Białe znaki i znak liczby
     while (isspace(*p)) p++;
     if (*p == '-') { sign = 1; p++; }
     else if (*p == '+') p++;
 
-    // Część całkowita i ułamkowa jako jedna liczba całkowita
     if (!isdigit(*p)) return -EINVAL;
     while (isdigit(*p)) {
         mant = mant * 10 + (*p - '0');
@@ -77,7 +70,6 @@ static int parse_scientific(const char *buf, u64 *val)
         }
     }
 
-    // Wykładnik dziesiętny
     if (*p == 'e' || *p == 'E') {
         int exp_sign = 1;
         p++;
@@ -101,10 +93,8 @@ static int parse_scientific(const char *buf, u64 *val)
         return 0;
     }
 
-    // Uproszczona konwersja eksponentu: e2 ≈ exp10 * 3
     int e2 = (exp10 << 1) + exp10;  // 3 * exp10
 
-    // Normalizacja mantysy tylko o 1 bit (jeśli konieczne)
     u64 m = mant;
     int shift = 0;
     if (m >= (HIDDEN_BIT << 1)) {
@@ -128,9 +118,6 @@ static int parse_scientific(const char *buf, u64 *val)
     return 0;
 }
 
-// ----------------------------------------------------------------------
-// Konwersja u64 (format własny) -> notacja naukowa (tekst)
-// ----------------------------------------------------------------------
 static int format_scientific(u64 val, char *buf, size_t len)
 {
     if (val == 0) return snprintf(buf, len, "0.0");
@@ -150,7 +137,7 @@ static int format_scientific(u64 val, char *buf, size_t len)
     int e10 = 0;
 
     while (e2 > 0) {
-        if (m > (U64_MAX / 2)) { m = (m + 5) / 10; e10++; }
+        if (m > (U64_MAX / 2)) { m = div_u64(m + 5, 10); e10++; }
         m <<= 1;
         e2--;
     }
@@ -159,12 +146,11 @@ static int format_scientific(u64 val, char *buf, size_t len)
         e2++;
     }
 
-    while (m >= 10) { m = (m + 5) / 10; e10++; }
+    while (m >= 10) { m = div_u64(m + 5, 10); e10++; }
 
     return snprintf(buf, len, "%s%llu.0e%d", sign ? "-" : "", m, e10);
 }
 
-// ----------------------------- PROC FS HANDLERS -----------------------------
 static ssize_t a1stma_write(struct file *f, const char __user *ubuf, size_t c, loff_t *pos)
 {
     char kbuf[64];
@@ -236,14 +222,12 @@ static ssize_t restma_read(struct file *f, char __user *ubuf, size_t c, loff_t *
     return simple_read_from_buffer(ubuf, c, pos, buf, len);
 }
 
-// Struktury file_operations (starsze API procfs)
 static const struct file_operations a1_fops = { .write = a1stma_write };
 static const struct file_operations a2_fops = { .write = a2stma_write };
 static const struct file_operations ctrl_fops= { .write = ctstma_write };
 static const struct file_operations stat_fops = { .read  = ststma_read };
 static const struct file_operations res_fops  = { .read  = restma_read };
 
-// ----------------------------------------------------------------------
 static int __init sykom_init(void)
 {
     baseptr = ioremap(SYKT_GPIO_BASE_ADDR, SYKT_GPIO_SIZE);
