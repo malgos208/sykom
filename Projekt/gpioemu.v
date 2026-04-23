@@ -12,13 +12,12 @@ module gpioemu(
     input [31:0] gpio_in,
     input gpio_latch,
     output [31:0] gpio_out,
-    output [31:0] gpio_in_s_insp     // <-- poprawione na output
+    output [31:0] gpio_in_s_insp
 );
 
     reg [31:0] gpio_in_s  /* verilator public_flat_rw */;
     reg [31:0] gpio_out_s /* verilator public_flat_rw */;
 
-    // Rejestry wejściowe i wynikowe
     reg [31:0] arg1_l, arg1_h;
     reg [31:0] arg2_l, arg2_h;
     reg [31:0] res_l, res_h;
@@ -30,26 +29,21 @@ module gpioemu(
     reg [26:0] res_e_raw;
     reg [71:0] res_m_raw;
 
-    // Stany automatu
     localparam [1:0] idle      = 2'd3,
                      compute   = 2'd1,
                      finished  = 2'd2;
 
-    // Łączymy połówki w pełne 64-bitowe liczby
     wire [63:0] a = {arg1_h, arg1_l};
     wire [63:0] b = {arg2_h, arg2_l};
 
-    // Pola 1. liczby (format: 1 znak, 27 exp, 36 mantysa)
     wire        s1 = a[63];
     wire [26:0] e1 = a[62:36];
-    wire [35:0] m1 = {1'b1, a[34:0]};      // ukryta jedynka
+    wire [35:0] m1 = {1'b1, a[34:0]};
 
-    // Pola 2. liczby
     wire        s2 = b[63];
     wire [26:0] e2 = b[62:36];
     wire [35:0] m2 = {1'b1, b[34:0]};
 
-    // GPIO
     always @(posedge clk or negedge n_reset) begin
         if (!n_reset) gpio_in_s <= 32'b0;
         else if (gpio_latch) gpio_in_s <= gpio_in;
@@ -57,7 +51,6 @@ module gpioemu(
     assign gpio_out = gpio_out_s;
     assign gpio_in_s_insp = gpio_in_s;
 
-    // Reset i przejścia stanów
     always @(posedge clk, negedge n_reset) begin
         if (!n_reset) begin
             arg1_l <= 0; arg1_h <= 0;
@@ -71,7 +64,6 @@ module gpioemu(
             state <= idle;
     end
 
-    // Zapis przez CPU
     always @(posedge clk, negedge n_reset) begin
         if (swr) begin
             case (saddress)
@@ -88,7 +80,6 @@ module gpioemu(
         end
     end
 
-    // Odczyt przez CPU
     always @(*) begin
         if (srd) begin
             case (saddress)
@@ -102,7 +93,6 @@ module gpioemu(
         else sdata_out = 32'h0;
     end
 
-    // Następny stan
     always @(*) begin
         state_next = state;
         case (state)
@@ -113,7 +103,6 @@ module gpioemu(
         endcase
     end
 
-    // Operacje na stanach
     always @(*) begin
         case (state)
             compute: begin
@@ -130,11 +119,11 @@ module gpioemu(
 
             finished: begin
                 if (res_m_raw[71]) begin
-                    res_h = {res_s, res_e_raw[26:0] + 27'd1, res_m_raw[70:53]};
-                    res_l = res_m_raw[52:21];
+                    res_h = {res_s, res_e_raw[26:0] + 27'd1, res_m_raw[70:67]};
+                    res_l = res_m_raw[66:35];
                 end else begin
-                    res_h = {res_s, res_e_raw[26:0], res_m_raw[69:52]};
-                    res_l = res_m_raw[51:20];
+                    res_h = {res_s, res_e_raw[26:0], res_m_raw[69:66]};
+                    res_l = res_m_raw[65:34];
                 end
             end
             default: ;
