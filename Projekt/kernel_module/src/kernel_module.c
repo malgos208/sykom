@@ -49,7 +49,6 @@ static struct proc_dir_entry *proc_a1, *proc_a2, *proc_ctrl, *proc_stat, *proc_r
 // ----------------------------------------------------------------------
 // Parser notacji naukowej -> u64 w formacie własnym
 // ----------------------------------------------------------------------
-
 static int parse_scientific(const char *buf, u64 *val)
 {
     const char *p = buf;
@@ -210,7 +209,6 @@ static ssize_t ctstma_write(struct file *f, const char __user *ubuf, size_t c, l
 
 static ssize_t ststma_read(struct file *f, char __user *ubuf, size_t c, loff_t *pos)
 {
-    char buf[16];
     u32 st = readl(baseptr + OFF_STATUS);
     const char *msg;
     if (st & STATUS_BUSY)           msg = "busy\n";
@@ -246,7 +244,7 @@ static const struct file_operations stat_fops = { .read  = ststma_read };
 static const struct file_operations res_fops  = { .read  = restma_read };
 
 // ----------------------------------------------------------------------
-static int __init init_module(void)
+static int __init sykom_init(void)
 {
     baseptr = ioremap(SYKT_GPIO_BASE_ADDR, SYKT_GPIO_SIZE);
     if (!baseptr) return -ENOMEM;
@@ -262,7 +260,6 @@ static int __init init_module(void)
 
     if (!proc_a1 || !proc_a2 || !proc_ctrl || !proc_stat || !proc_res) {
         pr_err("Failed to create proc entries\n");
-        // Pełne czyszczenie – usuń wszystkie wpisy, które mogły powstać
         remove_proc_entry("a1stma", proc_dir);
         remove_proc_entry("a2stma", proc_dir);
         remove_proc_entry("ctstma", proc_dir);
@@ -277,7 +274,7 @@ static int __init init_module(void)
     return 0;
 }
 
-static void __exit cleanup_module(void)
+static void __exit sykom_cleanup(void)
 {
     writel(SYKT_EXIT | ((SYKT_EXIT_CODE) << 16), baseptr);
     remove_proc_entry("a1stma", proc_dir);
@@ -290,5 +287,5 @@ static void __exit cleanup_module(void)
     pr_info("SYKOM multiplier module unloaded\n");
 }
 
-module_init(init_module);
-module_exit(cleanup_module);
+module_init(sykom_init);
+module_exit(sykom_cleanup);
