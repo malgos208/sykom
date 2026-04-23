@@ -40,7 +40,7 @@ module gpioemu(
     wire [26:0] e2 = b[62:36];
     wire [35:0] m2 = {1'b1, b[34:0]};
 
-    // GPIO – bez zmian
+    // GPIO
     always @(posedge clk or negedge n_reset) begin
         if (!n_reset) gpio_in_s <= 0;
         else if (gpio_latch) gpio_in_s <= gpio_in;
@@ -60,7 +60,7 @@ module gpioemu(
         end
     end
 
-    // Zapis rejestrów i natychmiastowe uruchomienie mnożenia
+    // Zapis rejestrów i uruchomienie automatu
     always @(posedge swr) begin
         case (saddress)
             16'h100: arg1_h <= sdata_in;
@@ -69,10 +69,10 @@ module gpioemu(
             16'h0F8: arg2_l <= sdata_in;
             16'h0D0: begin
                 if (sdata_in[0]) begin
-                    ena <= 1;
-                    state <= compute;          // od razu przechodzimy do liczenia
+                    ena   <= 1;
+                    state <= compute;
                 end else begin
-                    ena <= 0;
+                    ena   <= 0;
                     state <= idle;
                 end
             end
@@ -80,16 +80,16 @@ module gpioemu(
         endcase
     end
 
-    // Wykonanie mnożenia (ten sam posedge swr)
+    // Wykonanie mnożenia bezpośrednio po ustawieniu state = compute
     always @(posedge swr) begin
         if (state == compute) begin
             if (a == 0 || b == 0) begin
                 res_h <= 0;
                 res_l <= 0;
             end else begin
-                res_s = s1 ^ s2;
-                res_e_raw = e1 + e2 - 27'd67_108_863;
-                res_m_raw = {1'b1, m1} * {1'b1, m2};
+                res_s     <= s1 ^ s2;
+                res_e_raw <= e1 + e2 - 27'd67_108_863;
+                res_m_raw <= {1'b1, m1} * {1'b1, m2};
                 if (res_m_raw[71]) begin
                     res_h <= {res_s, res_e_raw + 27'd1, res_m_raw[70:67]};
                     res_l <= res_m_raw[66:35];
