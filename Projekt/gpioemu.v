@@ -27,6 +27,11 @@ module gpioemu(
     localparam [1:0] S_IDLE = 2'd0, S_COMPUTE = 2'd1, S_DONE = 2'd2;
     reg [1:0] state, next_state;
 
+    // Zmienne pomocnicze (przeniesione na zewnątrz)
+    reg        calc_sign;
+    reg [26:0] calc_exp;
+    reg [71:0] calc_mant;
+
     wire [63:0] a = {arg1_h, arg1_l};
     wire [63:0] b = {arg2_h, arg2_l};
     wire        s1 = a[63], s2 = b[63];
@@ -41,8 +46,8 @@ module gpioemu(
     assign gpio_out = gpio_out_s;
     assign gpio_in_s_insp = gpio_in_s;
 
-    // Reset
-    always @(negedge n_reset) begin
+    // Reset + logika stanu (JEDEN blok, bez MULTIDRIVEN)
+    always @(posedge swr or negedge n_reset) begin
         if (!n_reset) begin
             arg1_h <= 0; arg1_l <= 0;
             arg2_h <= 0; arg2_l <= 0;
@@ -51,10 +56,45 @@ module gpioemu(
             status_reg <= 0;
             state <= S_IDLE;
             gpio_out_s <= 0;
+        end else begin
+            // Zapis rejestrów
+            case (saddress)
+                16'h100: arg1_h <= sdata_in;
+                16'h108: arg1_l <= sdata_in;
+                16'h0F0: arg2_h <= sdata_in;
+                16'h0F8: arg2_l <= sdata_in;
+                16'h0D0: ctrl_reg <= sdata_in;
+                default: ;
+            endcase
+
+            // Przejście stanu
+            state <= next_state;
+
+            // Wykonanie mnożenia
+            if (next_state == S_COMPUTE) begin
+                if (a == 0 || b == 0) begin
+                    res_h <= 0; res_l <= 0;
+                    status_reg <= 4'b1100;     // ERROR + INVALID_ARG
+                end else begin
+                    calc_sign <= s1 ^ s2;
+                    calc_exp  <= e1 + e2 - 27'd67_108_863;
+                    calc_mant <= {1'b1, m1} * {1'b1, m2};
+                    status_reg <= 4'b0001;     // BUSY (obliczenia w toku)
+                end
+            end else if (state == S_DONE) begin
+                if (calc_mant[71]) begin
+                    res_h <= {calc_sign, calc_exp + 27'd1, calc_mant[70:67]};
+                    res_l <= calc_mant[66:35];
+                end else begin
+                    res_h <= {calc_sign, calc_exp, calc_mant[69:66]};
+                    res_l <= calc_mant[65:34];
+                end
+                status_reg <= 4'b0010;         // DONE
+            end
         end
     end
 
-    // Następny stan
+    // Następny stan (kombinacyjnie)
     always @(*) begin
         next_state = state;
         case (state)
@@ -65,43 +105,7 @@ module gpioemu(
         endcase
     end
 
-    // Zapis i wykonanie
-    always @(posedge swr) begin
-        case (saddress)
-            16'h100: arg1_h <= sdata_in;
-            16'h108: arg1_l <= sdata_in;
-            16'h0F0: arg2_h <= sdata_in;
-            16'h0F8: arg2_l <= sdata_in;
-            16'h0D0: ctrl_reg <= sdata_in;
-            default: ;
-        endcase
-
-        state <= next_state;
-
-        if (next_state == S_COMPUTE) begin
-            if (a == 0 || b == 0) begin
-                res_h <= 0; res_l <= 0;
-                status_reg <= 4'b1100;
-            end else begin
-                reg        sign;
-                reg [26:0] exp;
-                reg [71:0] mant;
-                sign = s1 ^ s2;
-                exp  = e1 + e2 - 27'd67_108_863;
-                mant = {1'b1, m1} * {1'b1, m2};
-                if (mant[71]) begin
-                    res_h <= {sign, exp + 27'd1, mant[70:67]};
-                    res_l <= mant[66:35];
-                end else begin
-                    res_h <= {sign, exp, mant[69:66]};
-                    res_l <= mant[65:34];
-                end
-                status_reg <= 4'b0010;
-            end
-        end
-    end
-
-    // Odczyt
+    // Odczyt rejestrów
     always @(*) begin
         if (srd) begin
             case (saddress)
