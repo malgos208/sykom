@@ -6,7 +6,6 @@
 #include <linux/io.h>
 #include <linux/string.h>
 #include <linux/ctype.h>
-#include <linux/delay.h>
 #include <linux/math64.h>
 
 MODULE_INFO(intree, "Y");
@@ -49,58 +48,43 @@ static int parse_scientific(const char *buf, u64 *val)
     const char *p = buf;
     int sign = 0;
     u64 mant = 0;
-    int exp10 = 0;
-    int frac_digits = 0;
+    int exp10 = 0, frac = 0;
 
     while (isspace(*p)) p++;
     if (*p == '-') { sign = 1; p++; }
     else if (*p == '+') p++;
 
     if (!isdigit(*p)) return -EINVAL;
-    while (isdigit(*p)) {
-        mant = mant * 10 + (*p - '0');
-        p++;
-    }
+    while (isdigit(*p)) { mant = mant * 10 + (*p - '0'); p++; }
     if (*p == '.') {
         p++;
-        while (isdigit(*p)) {
-            mant = mant * 10 + (*p - '0');
-            frac_digits++;
-            p++;
-        }
+        while (isdigit(*p)) { mant = mant * 10 + (*p - '0'); frac++; p++; }
     }
     if (*p == 'e' || *p == 'E') {
-        int exp_sign = 1;
+        int es = 1;
         p++;
-        if (*p == '-') { exp_sign = -1; p++; }
+        if (*p == '-') { es = -1; p++; }
         else if (*p == '+') p++;
         if (!isdigit(*p)) return -EINVAL;
         exp10 = 0;
-        while (isdigit(*p)) {
-            exp10 = exp10 * 10 + (*p - '0');
-            p++;
-        }
-        exp10 *= exp_sign;
+        while (isdigit(*p)) { exp10 = exp10 * 10 + (*p - '0'); p++; }
+        exp10 *= es;
     }
     while (isspace(*p)) p++;
     if (*p != '\0') return -EINVAL;
 
-    exp10 -= frac_digits;
+    exp10 -= frac;
     if (mant == 0) { *val = 0; return 0; }
 
-    int e2 = exp10 * 3;
     u64 m = mant;
-    int shift = 0;
-    if (m >= (HIDDEN_BIT << 1)) { m >>= 1; shift = 1; }
-    else if (m < HIDDEN_BIT)    { m <<= 1; shift = -1; }
-    e2 += shift;
+    int e2 = exp10 * 3;
+
+    while (m >= (HIDDEN_BIT << 1)) { m >>= 1; e2++; }
+    while (m < HIDDEN_BIT)         { m <<= 1; e2--; }
 
     int exp_final = e2 + EXP_BIAS;
     if (exp_final <= 0) { *val = 0; return 0; }
-    if (exp_final >= (1 << EXP_BITS)) {
-        exp_final = (1 << EXP_BITS) - 1;
-        m = 0;
-    }
+    if (exp_final >= (1 << EXP_BITS)) { exp_final = (1 << EXP_BITS) - 1; m = 0; }
     m &= MANT_MASK;
     *val = ((u64)sign << 63) | ((u64)exp_final << MANT_BITS) | m;
     return 0;
@@ -112,20 +96,24 @@ static int format_scientific(u64 val, char *buf, size_t len)
     int sign = (val >> 63) & 1;
     int exp  = (val >> MANT_BITS) & ((1 << EXP_BITS)-1);
     u64 mant = val & MANT_MASK;
+
     if (exp == 0 || exp == (1<<EXP_BITS)-1) {
         if (mant == 0) return snprintf(buf, len, "%sinf", sign ? "-" : "");
         else return snprintf(buf, len, "nan");
     }
+
     mant |= HIDDEN_BIT;
     int e2 = exp - EXP_BIAS;
     u64 m = mant;
     int e10 = 0;
+
     while (e2 > 0) {
         if (m > (U64_MAX / 2)) { m = div_u64(m + 5, 10); e10++; }
         m <<= 1; e2--;
     }
     while (e2 < 0) { m = (m + 1) >> 1; e2++; }
     while (m >= 10) { m = div_u64(m + 5, 10); e10++; }
+
     return snprintf(buf, len, "%s%llu.0e%d", sign ? "-" : "", m, e10);
 }
 
@@ -203,13 +191,16 @@ static int __init sykom_init(void)
 {
     baseptr = ioremap(SYKT_GPIO_BASE_ADDR, SYKT_GPIO_SIZE);
     if (!baseptr) return -ENOMEM;
+
     proc_dir = proc_mkdir("sykom", NULL);
     if (!proc_dir) { iounmap(baseptr); return -ENOMEM; }
-    proc_a1   = proc_create("a1stma", 0220, proc_dir, &a1_fops);
-    proc_a2   = proc_create("a2stma", 0220, proc_dir, &a2_fops);
+
+    proc_a1 = proc_create("a1stma", 0220, proc_dir, &a1_fops);
+    proc_a2 = proc_create("a2stma", 0220, proc_dir, &a2_fops);
     proc_ctrl = proc_create("ctstma", 0220, proc_dir, &ctrl_fops);
     proc_stat = proc_create("ststma", 0444, proc_dir, &stat_fops);
-    proc_res  = proc_create("restma", 0444, proc_dir, &res_fops);
+    proc_res = proc_create("restma", 0444, proc_dir, &res_fops);
+
     if (!proc_a1 || !proc_a2 || !proc_ctrl || !proc_stat || !proc_res) {
         pr_err("Failed to create proc entries\n");
         remove_proc_entry("a1stma", proc_dir);
