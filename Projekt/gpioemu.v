@@ -42,11 +42,11 @@ reg [31:0] res_h,  res_l;
 reg [31:0] ctrl_reg;
 reg [31:0] status_reg;
 
-// Bity statusu
-`define STATUS_BUSY    (1<<0)
-`define STATUS_DONE    (1<<1)
-`define STATUS_ERROR   (1<<2)
-`define STATUS_INVALID_ARGID (1<<3)
+// Bity statusu (ujednolicone nazwy)
+`define STATUS_BUSY          (1<<0)
+`define STATUS_DONE          (1<<1)
+`define STATUS_ERROR         (1<<2)
+`define STATUS_INVALID_ARG   (1<<3)
 
 // Stany automatu
 localparam S_IDLE  = 2'd0;
@@ -140,7 +140,7 @@ always @(posedge clk) begin
     if (state == S_MULT) begin
         // Walidacja
         if ((exp1 == 0 && mant1 == 0) || (exp2 == 0 && mant2 == 0)) begin
-            status_reg <= `STATUS_INVALID_ARGID | `STATUS_ERROR;
+            status_reg <= `STATUS_INVALID_ARG | `STATUS_ERROR;
         end else begin
             status_reg <= `STATUS_BUSY;
             calc_sign <= sign1 ^ sign2;
@@ -149,8 +149,9 @@ always @(posedge clk) begin
         end
     end else if (state == S_DONE) begin
         // Normalizacja i zapis do rejestrów wynikowych
+        // Dodanie 27'd1 gwarantuje określoną szerokość
         if (calc_mant[71]) begin
-            {res_h, res_l} <= {calc_sign, calc_exp + 1, calc_mant[70:35]};
+            {res_h, res_l} <= {calc_sign, calc_exp + 27'd1, calc_mant[70:35]};
         end else begin
             {res_h, res_l} <= {calc_sign, calc_exp, calc_mant[69:34]};
         end
