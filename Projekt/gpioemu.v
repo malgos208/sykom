@@ -4,147 +4,141 @@
 /* verilator lint_off COMBDLY */
 
 module gpioemu(
-    n_reset, saddress, srd, swr, sdata_in, sdata_out,
-    gpio_in, gpio_latch, gpio_out, clk, gpio_in_s_insp
+    input n_reset, clk,
+    input [15:0] saddress,
+    input srd, swr,
+    input [31:0] sdata_in,
+    output reg [31:0] sdata_out,
+    input [31:0] gpio_in,
+    input gpio_latch,
+    output [31:0] gpio_out,
+    input [31:0] gpio_in_s_insp
 );
 
-input           n_reset;
-input  [15:0]   saddress;
-input           srd;
-input           swr;
-input  [31:0]   sdata_in;
-output [31:0]   sdata_out;
-reg    [31:0]   sdata_out;
-input  [31:0]   gpio_in;
-input           gpio_latch;
-output [31:0]   gpio_out;
-input           clk;               // nieużywany wewnętrznie
-output [31:0]   gpio_in_s_insp;
+    reg [31:0] gpio_in_s  /* verilator public_flat_rw */;
+    reg [31:0] gpio_out_s /* verilator public_flat_rw */;
 
-reg [31:0] gpio_in_s  /* verilator public_flat_rw */;
-reg [31:0] gpio_out_s /* verilator public_flat_rw */;
+    // Rejestry wejściowe i wynikowe
+    reg [31:0] arg1_l, arg1_h;
+    reg [31:0] arg2_l, arg2_h;
+    reg [31:0] res_l, res_h;
+    reg [1:0] state;
+    reg [1:0] state_next;
+    reg ena;
 
-`define ADDR_ARG1_H  16'h100
-`define ADDR_ARG1_L  16'h108
-`define ADDR_ARG2_H  16'h0F0
-`define ADDR_ARG2_L  16'h0F8
-`define ADDR_CTRL    16'h0D0
-`define ADDR_STATUS  16'h0E8
-`define ADDR_RES_H   16'h0D8
-`define ADDR_RES_L   16'h0E0
+    reg res_s;
+    reg [26:0] res_e_raw;
+    reg [71:0] res_m_raw;
 
-reg [31:0] arg1_h, arg1_l;
-reg [31:0] arg2_h, arg2_l;
-reg [31:0] res_h,  res_l;
-reg [31:0] ctrl_reg;
-reg [31:0] status_reg;
+    // Stany automatu
+    localparam [1:0] idle      = 2'd3,
+                     compute   = 2'd1,
+                     finished  = 2'd2;
 
-`define STATUS_BUSY          (1<<0)
-`define STATUS_DONE          (1<<1)
-`define STATUS_ERROR         (1<<2)
-`define STATUS_INVALID_ARG   (1<<3)
+    // Łączymy połówki w pełne 64-bitowe liczby
+    wire [63:0] a = {arg1_h, arg1_l};
+    wire [63:0] b = {arg2_h, arg2_l};
 
-localparam S_IDLE  = 2'd0;
-localparam S_MULT  = 2'd1;
-localparam S_DONE  = 2'd2;
+    // Pola 1. liczby (format: 1 znak, 27 exp, 36 mantysa)
+    wire        s1 = a[63];
+    wire [26:0] e1 = a[62:36];
+    wire [35:0] m1 = {1'b1, a[34:0]};      // ukryta jedynka, mantysa 36 bitów
 
-reg [1:0] state, next_state;
+    // Pola 2. liczby
+    wire        s2 = b[63];
+    wire [26:0] e2 = b[62:36];
+    wire [35:0] m2 = {1'b1, b[34:0]};
 
-// GPIO
-always @(negedge n_reset) begin
-    if (!n_reset) begin
-        gpio_in_s  <= 0;
-        gpio_out_s <= 0;
+    // GPIO
+    always @(posedge clk or negedge n_reset) begin
+        if (!n_reset) gpio_in_s <= 32'b0;
+        else if (gpio_latch) gpio_in_s <= gpio_in;
     end
-end
-assign gpio_out = gpio_out_s;
-assign gpio_in_s_insp = gpio_in_s;
-always @(posedge gpio_latch) gpio_in_s <= gpio_in;
+    assign gpio_out = gpio_out_s;
+    assign gpio_in_s_insp = gpio_in_s;
 
-// Reset i rejestry
-always @(negedge n_reset) begin
-    if (!n_reset) begin
-        arg1_h <= 0; arg1_l <= 0;
-        arg2_h <= 0; arg2_l <= 0;
-        res_h  <= 0; res_l  <= 0;
-        ctrl_reg <= 0;
-        status_reg <= 0;
-        state <= S_IDLE;
-    end
-end
-
-// Zapis rejestrów + wyzwalanie automatu
-always @(posedge swr) begin
-    case (saddress)
-        `ADDR_ARG1_H: arg1_h <= sdata_in;
-        `ADDR_ARG1_L: arg1_l <= sdata_in;
-        `ADDR_ARG2_H: arg2_h <= sdata_in;
-        `ADDR_ARG2_L: arg2_l <= sdata_in;
-        `ADDR_CTRL: begin
-            ctrl_reg <= sdata_in;
-            if (sdata_in[0]) begin
-                state <= S_MULT;
-                status_reg <= `STATUS_BUSY;
-            end else begin
-                state <= S_IDLE;
-                status_reg <= 0;
-            end
+    // Reset i przejścia stanów
+    always @(posedge clk, negedge n_reset) begin
+        if (!n_reset) begin
+            arg1_l <= 0; arg1_h <= 0;
+            arg2_l <= 0; arg2_h <= 0;
+            state <= idle;
+            gpio_out_s <= 0;
         end
-        default: ;
-    endcase
-end
-
-// Automat – wykonanie mnożenia przy przejściu do S_MULT
-wire [63:0] a = {arg1_h, arg1_l};
-wire [63:0] b = {arg2_h, arg2_l};
-
-wire        s1 = a[63];
-wire [26:0] e1 = a[62:36];
-wire [35:0] m1 = a[35:0];
-
-wire        s2 = b[63];
-wire [26:0] e2 = b[62:36];
-wire [35:0] m2 = b[35:0];
-
-always @(posedge swr) begin
-    if (state == S_MULT) begin
-        if ((e1 == 0 && m1 == 0) || (e2 == 0 && m2 == 0)) begin
-            status_reg <= `STATUS_INVALID_ARG | `STATUS_ERROR;
-        end else begin
-            reg r_sign;
-            reg [26:0] r_exp;
-            reg [71:0] r_mant;
-            r_sign = s1 ^ s2;
-            r_exp  = e1 + e2 - 27'd67_108_863;
-            r_mant = {1'b1, m1} * {1'b1, m2};
-            if (r_mant[71]) begin
-                {res_h, res_l} <= {r_sign, r_exp + 27'd1, r_mant[70:35]};
-            end else begin
-                {res_h, res_l} <= {r_sign, r_exp, r_mant[69:34]};
-            end
-            status_reg <= `STATUS_DONE;
-        end
-        state <= S_DONE;
+        else if (ena)
+            state <= state_next;
+        else
+            state <= idle;
     end
-end
 
-// Odczyt
-always @(*) begin
-    if (srd) begin
-        case (saddress)
-            `ADDR_ARG1_H: sdata_out = arg1_h;
-            `ADDR_ARG1_L: sdata_out = arg1_l;
-            `ADDR_ARG2_H: sdata_out = arg2_h;
-            `ADDR_ARG2_L: sdata_out = arg2_l;
-            `ADDR_CTRL:   sdata_out = ctrl_reg;
-            `ADDR_STATUS: sdata_out = status_reg;
-            `ADDR_RES_H:  sdata_out = res_h;
-            `ADDR_RES_L:  sdata_out = res_l;
-            default:      sdata_out = 32'hDEADBEEF;
+    // Zapis przez CPU
+    always @(posedge clk, negedge n_reset) begin
+        if (swr) begin
+            case (saddress)
+                16'h100: arg1_h <= sdata_in;
+                16'h108: arg1_l <= sdata_in;
+                16'h0F0: arg2_h <= sdata_in;
+                16'h0F8: arg2_l <= sdata_in;
+                16'h0D0: begin
+                    if (sdata_in[0] == 1'b1) ena <= 1;
+                    else if (sdata_in[0] == 1'b0) ena <= 0;
+                end
+                default: ;
+            endcase
+        end
+    end
+
+    // Odczyt przez CPU
+    always @(*) begin
+        if (srd) begin
+            case (saddress)
+                16'h0D0: sdata_out = {31'b0, ena};
+                16'h0E8: sdata_out = {30'b0, state};
+                16'h0E0: sdata_out = res_l;
+                16'h0D8: sdata_out = res_h;
+                default: sdata_out = 32'hdeadbeef;
+            endcase
+        end
+        else sdata_out = 32'h0;
+    end
+
+    // Następny stan
+    always @(*) begin
+        state_next = state;
+        case (state)
+            idle:     if (ena) state_next = compute;
+            compute:  state_next = finished;
+            finished: state_next = idle;
+            default:  state_next = idle;
         endcase
-    end else begin
-        sdata_out = 32'h0;
     end
-end
+
+    // Operacje na stanach
+    always @(*) begin
+        case (state)
+            compute: begin
+                if (a == 64'b0 || b == 64'b0) begin
+                    res_s = 0;
+                    res_e_raw = 27'b0;
+                    res_m_raw = 72'b0;
+                end else begin
+                    res_s = s1 ^ s2;
+                    res_e_raw = e1 + e2 - 27'd67_108_863;
+                    res_m_raw = {1'b1, m1} * {1'b1, m2};
+                end
+            end
+
+            finished: begin
+                if (res_m_raw[71]) begin
+                    res_h = {res_s, res_e_raw[26:0] + 27'd1, res_m_raw[70:53]};
+                    res_l = res_m_raw[52:21];
+                end else begin
+                    res_h = {res_s, res_e_raw[26:0], res_m_raw[69:52]};
+                    res_l = res_m_raw[51:20];
+                end
+            end
+            default: ;
+        endcase
+    end
 
 endmodule

@@ -69,7 +69,6 @@ static int parse_scientific(const char *buf, u64 *val)
             p++;
         }
     }
-
     if (*p == 'e' || *p == 'E') {
         int exp_sign = 1;
         p++;
@@ -83,27 +82,17 @@ static int parse_scientific(const char *buf, u64 *val)
         }
         exp10 *= exp_sign;
     }
-
     while (isspace(*p)) p++;
     if (*p != '\0') return -EINVAL;
 
     exp10 -= frac_digits;
-    if (mant == 0) {
-        *val = 0;
-        return 0;
-    }
+    if (mant == 0) { *val = 0; return 0; }
 
-    int e2 = (exp10 << 1) + exp10;  // 3 * exp10
-
+    int e2 = exp10 * 3;
     u64 m = mant;
     int shift = 0;
-    if (m >= (HIDDEN_BIT << 1)) {
-        m >>= 1;
-        shift = 1;
-    } else if (m < HIDDEN_BIT) {
-        m <<= 1;
-        shift = -1;
-    }
+    if (m >= (HIDDEN_BIT << 1)) { m >>= 1; shift = 1; }
+    else if (m < HIDDEN_BIT)    { m <<= 1; shift = -1; }
     e2 += shift;
 
     int exp_final = e2 + EXP_BIAS;
@@ -112,7 +101,6 @@ static int parse_scientific(const char *buf, u64 *val)
         exp_final = (1 << EXP_BITS) - 1;
         m = 0;
     }
-
     m &= MANT_MASK;
     *val = ((u64)sign << 63) | ((u64)exp_final << MANT_BITS) | m;
     return 0;
@@ -121,40 +109,29 @@ static int parse_scientific(const char *buf, u64 *val)
 static int format_scientific(u64 val, char *buf, size_t len)
 {
     if (val == 0) return snprintf(buf, len, "0.0");
-
-    int sign   = (val >> 63) & 1;
-    int exp    = (val >> MANT_BITS) & ((1 << EXP_BITS)-1);
-    u64 mant   = val & MANT_MASK;
-
+    int sign = (val >> 63) & 1;
+    int exp  = (val >> MANT_BITS) & ((1 << EXP_BITS)-1);
+    u64 mant = val & MANT_MASK;
     if (exp == 0 || exp == (1<<EXP_BITS)-1) {
         if (mant == 0) return snprintf(buf, len, "%sinf", sign ? "-" : "");
         else return snprintf(buf, len, "nan");
     }
-
     mant |= HIDDEN_BIT;
     int e2 = exp - EXP_BIAS;
     u64 m = mant;
     int e10 = 0;
-
     while (e2 > 0) {
         if (m > (U64_MAX / 2)) { m = div_u64(m + 5, 10); e10++; }
-        m <<= 1;
-        e2--;
+        m <<= 1; e2--;
     }
-    while (e2 < 0) {
-        m = (m + 1) >> 1;
-        e2++;
-    }
-
+    while (e2 < 0) { m = (m + 1) >> 1; e2++; }
     while (m >= 10) { m = div_u64(m + 5, 10); e10++; }
-
     return snprintf(buf, len, "%s%llu.0e%d", sign ? "-" : "", m, e10);
 }
 
 static ssize_t a1stma_write(struct file *f, const char __user *ubuf, size_t c, loff_t *pos)
 {
-    char kbuf[64];
-    u64 val;
+    char kbuf[64]; u64 val;
     if (c >= sizeof(kbuf)) return -EINVAL;
     if (copy_from_user(kbuf, ubuf, c)) return -EFAULT;
     kbuf[c] = '\0';
@@ -166,8 +143,7 @@ static ssize_t a1stma_write(struct file *f, const char __user *ubuf, size_t c, l
 
 static ssize_t a2stma_write(struct file *f, const char __user *ubuf, size_t c, loff_t *pos)
 {
-    char kbuf[64];
-    u64 val;
+    char kbuf[64]; u64 val;
     if (c >= sizeof(kbuf)) return -EINVAL;
     if (copy_from_user(kbuf, ubuf, c)) return -EFAULT;
     kbuf[c] = '\0';
@@ -179,16 +155,14 @@ static ssize_t a2stma_write(struct file *f, const char __user *ubuf, size_t c, l
 
 static ssize_t ctstma_write(struct file *f, const char __user *ubuf, size_t c, loff_t *pos)
 {
-    char kbuf[8];
-    u32 cmd;
+    char kbuf[8]; u32 cmd;
     if (c >= sizeof(kbuf)) return -EINVAL;
     if (copy_from_user(kbuf, ubuf, c)) return -EFAULT;
     kbuf[c] = '\0';
     if (kstrtou32(kbuf, 10, &cmd)) return -EINVAL;
     if (cmd == 1) {
         u32 st = readl(baseptr + OFF_STATUS);
-        if (!(st & STATUS_BUSY))
-            writel(1, baseptr + OFF_CTRL);
+        if (!(st & STATUS_BUSY)) writel(1, baseptr + OFF_CTRL);
     }
     return c;
 }
@@ -196,19 +170,17 @@ static ssize_t ctstma_write(struct file *f, const char __user *ubuf, size_t c, l
 static ssize_t ststma_read(struct file *f, char __user *ubuf, size_t c, loff_t *pos)
 {
     u32 st = readl(baseptr + OFF_STATUS);
-    const char *msg;
-    if (st & STATUS_BUSY)           msg = "busy\n";
-    else if (st & STATUS_DONE)      msg = "done\n";
-    else if (st & STATUS_ERROR)     msg = "error\n";
-    else                            msg = "idle\n";
+    const char *msg = "idle\n";
+    if (st & STATUS_BUSY)       msg = "busy\n";
+    else if (st & STATUS_DONE)  msg = "done\n";
+    else if (st & STATUS_ERROR) msg = "error\n";
     return simple_read_from_buffer(ubuf, c, pos, msg, strlen(msg));
 }
 
 static ssize_t restma_read(struct file *f, char __user *ubuf, size_t c, loff_t *pos)
 {
-    char buf[64];
+    char buf[64]; int len;
     u32 st = readl(baseptr + OFF_STATUS);
-    int len;
     if (!(st & STATUS_DONE)) {
         len = snprintf(buf, sizeof(buf), "not ready\n");
     } else {
@@ -216,8 +188,7 @@ static ssize_t restma_read(struct file *f, char __user *ubuf, size_t c, loff_t *
         u32 lo = readl(baseptr + OFF_RES_L);
         u64 val = ((u64)hi << 32) | lo;
         len = format_scientific(val, buf, sizeof(buf));
-        buf[len++] = '\n';
-        buf[len] = '\0';
+        buf[len++] = '\n'; buf[len] = '\0';
     }
     return simple_read_from_buffer(ubuf, c, pos, buf, len);
 }
@@ -225,23 +196,20 @@ static ssize_t restma_read(struct file *f, char __user *ubuf, size_t c, loff_t *
 static const struct file_operations a1_fops = { .write = a1stma_write };
 static const struct file_operations a2_fops = { .write = a2stma_write };
 static const struct file_operations ctrl_fops= { .write = ctstma_write };
-static const struct file_operations stat_fops = { .read  = ststma_read };
-static const struct file_operations res_fops  = { .read  = restma_read };
+static const struct file_operations stat_fops= { .read  = ststma_read };
+static const struct file_operations res_fops = { .read  = restma_read };
 
 static int __init sykom_init(void)
 {
     baseptr = ioremap(SYKT_GPIO_BASE_ADDR, SYKT_GPIO_SIZE);
     if (!baseptr) return -ENOMEM;
-
     proc_dir = proc_mkdir("sykom", NULL);
     if (!proc_dir) { iounmap(baseptr); return -ENOMEM; }
-
     proc_a1   = proc_create("a1stma", 0220, proc_dir, &a1_fops);
     proc_a2   = proc_create("a2stma", 0220, proc_dir, &a2_fops);
     proc_ctrl = proc_create("ctstma", 0220, proc_dir, &ctrl_fops);
     proc_stat = proc_create("ststma", 0444, proc_dir, &stat_fops);
     proc_res  = proc_create("restma", 0444, proc_dir, &res_fops);
-
     if (!proc_a1 || !proc_a2 || !proc_ctrl || !proc_stat || !proc_res) {
         pr_err("Failed to create proc entries\n");
         remove_proc_entry("a1stma", proc_dir);
@@ -253,7 +221,6 @@ static int __init sykom_init(void)
         iounmap(baseptr);
         return -ENOMEM;
     }
-
     pr_info("SYKOM multiplier procfs module loaded\n");
     return 0;
 }
