@@ -19,14 +19,14 @@ MODULE_VERSION("1.0");
 #define SYKT_EXIT             0x3333
 #define SYKT_EXIT_CODE        0x7F
 
-#define OFF_ARG1_H  0x100
-#define OFF_ARG1_L  0x108
-#define OFF_ARG2_H  0xFC0
-#define OFF_ARG2_L  0xFC8
-#define OFF_CTRL    0xDC0
-#define OFF_STATUS  0xEC8
-#define OFF_RES_H   0xDC8
-#define OFF_RES_L   0xEC0
+#define OFF_ARG1_H 0x100
+#define OFF_ARG1_L 0x108
+#define OFF_ARG2_H 0xF0
+#define OFF_ARG2_L 0xF8
+#define OFF_CTRL   0xD0
+#define OFF_STATUS 0xE8
+#define OFF_RES_H  0xD8
+#define OFF_RES_L  0xE0
 
 #define STATUS_BUSY          0x01
 #define STATUS_DONE          0x02
