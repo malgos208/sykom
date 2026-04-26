@@ -1,3 +1,9 @@
+/* verilator lint_off UNUSED */
+/* verilator lint_off UNDRIVEN */
+/* verilator lint_off MULTIDRIVEN */
+/* verilator lint_off COMBDLY */
+/* verilator lint_off SYNCASYNCNET */
+
 module gpioemu(
     input        n_reset,
     input [15:0] saddress,
