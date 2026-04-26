@@ -64,16 +64,14 @@ module gpioemu(
     wire [26:0] e2 = b[62:36];
     wire [35:0] m2 = b[35:0];
 
-    /* Stałe dla formatu zmiennoprzecinkowego */
-    localparam [26:0] EXP_MAX  = 27'h7FFFFFF;  /* Maksymalny wykładnik (27 bitów) */
-    localparam [26:0] EXP_BIAS = 27'd67108863; /* Bias dla 27-bitowego wykładnika */
-    localparam [5:0]  MANT_BITS = 6'd36;       /* Liczba bitów mantysy */
+    /* Stałe */
+    localparam [26:0] EXP_MAX  = 27'h7FFFFFF;
+    localparam [26:0] EXP_BIAS = 27'd67108863;
+    localparam [5:0]  MANT_BITS = 6'd36;
 
-    /* Zmienne pomocnicze do obliczeń */
-    reg [71:0] product;       /* Iloczyn mantys (36+1)*(36+1) = max 74 bity, używamy 72 */
-    reg        result_sign;
-    reg [26:0] result_exp;
-    reg [71:0] result_mant;
+    /* Zmienne pomocnicze */
+    reg [63:0] result_64;
+    reg        busy;
 
     /* --------- Sekwencyjna logika ------------ */
     always @(negedge n_reset or posedge swr) begin
@@ -88,11 +86,8 @@ module gpioemu(
             status_reg <= 32'b0;
             state      <= S_IDLE;
             gpio_out_s <= 32'b0;
-            
-            product      <= 72'b0;
-            result_sign  <= 1'b0;
-            result_exp   <= 27'b0;
-            result_mant  <= 72'b0;
+            result_64  <= 64'b0;
+            busy       <= 1'b0;
         end else begin
             case (state)
                 S_IDLE: begin
@@ -105,7 +100,8 @@ module gpioemu(
                             ctrl_reg <= sdata_in;
                             if (sdata_in[0]) begin
                                 state <= S_COMPUTE;
-                                status_reg <= 32'h00000001; /* BUSY */
+                                status_reg <= 32'h00000001; // BUSY
+                                busy <= 1'b1;
                             end
                         end
                         default: ;
@@ -113,50 +109,44 @@ module gpioemu(
                 end
 
                 S_COMPUTE: begin
-                    /* Sprawdzenie przypadków specjalnych */
+                    busy <= 1'b0;
                     if (a == 64'b0 || b == 64'b0) begin
-                        /* Mnożenie przez zero */
-                        res_h <= 32'b0;
-                        res_l <= 32'b0;
+                        result_64 <= 64'b0;
                         state <= S_DONE;
-                        status_reg <= 32'h00000002; /* DONE */
+                        status_reg <= 32'h00000002; // DONE
                     end else if (e1 == 27'd0 || e2 == 27'd0 || 
                                  e1 == EXP_MAX || e2 == EXP_MAX) begin
-                        /* Wartości specjalne */
-                        res_h <= 32'b0;
-                        res_l <= 32'b0;
+                        result_64 <= 64'b0;
                         state <= S_ERROR;
-                        status_reg <= 32'h0000000C; /* ERROR + INVALID */
+                        status_reg <= 32'h0000000C; // ERROR + INVALID
                     end else begin
-                        /* Normalne mnożenie */
-                        result_sign = s1 ^ s2;
-                        result_exp = e1 + e2 - EXP_BIAS;
-                        
                         /* Mnożenie mantys z ukrytym bitem */
-                        product = {1'b0, 1'b1, m1} * {1'b0, 1'b1, m2};
-                        
-                        /* Normalizacja wyniku */
-                        if (product[71]) begin
-                            /* Przesunięcie w prawo o 1 */
-                            result_mant = product >> 1;
-                            result_exp = result_exp + 27'd1;
-                        end else begin
-                            result_mant = product;
+                        reg [72:0] product;
+                        reg        sign;
+                        reg [26:0] exp;
+                        reg [35:0] mant;
+
+                        sign = s1 ^ s2;
+                        exp  = e1 + e2 - EXP_BIAS;
+                        product = {1'b0, 1'b1, m1} * {1'b0, 1'b1, m2}; // (37+37) -> max 74 bity, tu 73 wystarczy
+
+                        /* Normalizacja */
+                        if (product[72]) begin
+                            product = product >> 1;
+                            exp = exp + 27'd1;
                         end
-                        
-                        /* Zapisanie wyniku do rejestrów wyjściowych */
-                        res_h[63]    <= result_sign;
-                        res_h[62:36] <= result_exp;
-                        res_h[35:0]  <= result_mant[70:35]; /* Górne 36 bitów mantysy */
-                        res_l        <= result_mant[34:3];  /* Dolne 32 bity mantysy */
-                        
+
+                        /* Pobranie mantysy (bity 71..36 po normalizacji) */
+                        mant = product[71:36];  // 36 bitów
+
+                        /* Złożenie 64-bitowego wyniku */
+                        result_64 <= {sign, exp, mant};
                         state <= S_DONE;
-                        status_reg <= 32'h00000002; /* DONE */
+                        status_reg <= 32'h00000002; // DONE
                     end
                 end
 
                 S_DONE, S_ERROR: begin
-                    /* Powrót do IDLE po wyzerowaniu bitu start */
                     if (saddress == 16'h0DC0 && sdata_in[0] == 1'b0) begin
                         ctrl_reg <= 32'b0;
                         state <= S_IDLE;
@@ -164,10 +154,18 @@ module gpioemu(
                     end
                 end
 
-                default: begin
-                    state <= S_IDLE;
-                end
+                default: state <= S_IDLE;
             endcase
+        end
+    end
+
+    /* -------- Przypisanie wyniku do rejestrów wyjściowych -------- */
+    always @(posedge swr) begin
+        if (!n_reset) begin
+            // nic
+        end else if (state == S_DONE && !busy) begin
+            res_h <= result_64[63:32];
+            res_l <= result_64[31:0];
         end
     end
 
