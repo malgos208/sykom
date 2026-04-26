@@ -54,12 +54,13 @@ module gpioemu(
     wire [63:0] a = {arg1_h, arg1_l};
     wire [63:0] b = {arg2_h, arg2_l};
 
-    wire s1 = a[63];
-    wire s2 = b[63];
+    wire        s1 = a[63];
     wire [26:0] e1 = a[62:36];
+    wire [35:0] m1 = a[35:0];
+
+    wire        s2 = b[63];
     wire [26:0] e2 = b[62:36];
-    wire [35:0] m1 = {1'b1, a[35:0]};
-    wire [35:0] m2 = {1'b1, b[35:0]};
+    wire [35:0] m2 = b[35:0];
 
     /* --------- Sekwencyjna logika (CPU) ------------ */
     always @(negedge n_reset or posedge swr) begin
