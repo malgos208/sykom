@@ -1,9 +1,3 @@
-/* verilator lint_off UNUSED */
-/* verilator lint_off UNDRIVEN */
-/* verilator lint_off MULTIDRIVEN */
-/* verilator lint_off COMBDLY */
-/* verilator lint_off SYNCASYNCNET */
-
 module gpioemu(
     input        n_reset,
     input [15:0] saddress,
@@ -37,14 +31,14 @@ module gpioemu(
     assign gpio_out = gpio_out_s;
     assign gpio_in_s_insp = gpio_in_s;
 
-    /* ------------- REJESTRY CPU ------------- */
+    /* ---------------- REGISTERS ---------------- */
     reg [31:0] arg1_h, arg1_l;
     reg [31:0] arg2_h, arg2_l;
     reg [31:0] res_h, res_l;
     reg [31:0] ctrl_reg;
     reg [31:0] status_reg;
 
-    /* ------------- FSM ---------------- */
+    /* ---------------- FSM ---------------- */
     localparam [1:0]
         S_IDLE    = 2'd0,
         S_COMPUTE = 2'd1,
@@ -52,8 +46,9 @@ module gpioemu(
         S_ERROR   = 2'd3;
 
     reg [1:0] state;
+    reg busy;
 
-    /* -------- FORMAT 64-bit -------- */
+    /* ---------------- FORMAT ---------------- */
     wire [63:0] a = {arg1_h, arg1_l};
     wire [63:0] b = {arg2_h, arg2_l};
 
@@ -69,9 +64,8 @@ module gpioemu(
     localparam [26:0] EXP_BIAS = 27'd67108863;
 
     reg [63:0] result_64;
-    reg busy;
 
-    /* ------------- WRITE FSM ------------- */
+    /* ---------------- WRITE LOGIC ---------------- */
     always @(negedge n_reset or posedge swr) begin
         if (!n_reset) begin
             arg1_h <= 0; arg1_l <= 0;
@@ -80,12 +74,12 @@ module gpioemu(
             ctrl_reg <= 0;
             status_reg <= 0;
             state <= S_IDLE;
-            result_64 <= 0;
             busy <= 0;
+            result_64 <= 0;
         end else begin
+
             case (state)
 
-            /* ---------------- IDLE ---------------- */
             S_IDLE: begin
                 case (saddress)
 
@@ -99,15 +93,18 @@ module gpioemu(
                         ctrl_reg <= sdata_in;
                         if (sdata_in[0]) begin
                             state <= S_COMPUTE;
-                            status_reg <= 32'h1; // BUSY
+                            status_reg <= 32'h1;
                             busy <= 1;
                         end
+                    end
+
+                    default: begin
+                        // safe no-op
                     end
 
                 endcase
             end
 
-            /* ---------------- COMPUTE ---------------- */
             S_COMPUTE: begin
                 busy <= 0;
 
@@ -146,7 +143,6 @@ module gpioemu(
                 end
             end
 
-            /* ---------------- DONE / ERROR ---------------- */
             S_DONE, S_ERROR: begin
                 if (saddress == 16'h00D0 && sdata_in[0] == 0) begin
                     ctrl_reg <= 0;
@@ -155,20 +151,28 @@ module gpioemu(
                 end
             end
 
+            default: begin
+                state <= S_IDLE;
+            end
+
             endcase
         end
     end
 
-    /* ------------- ZAPIS WYNIKU ------------- */
-    always @(posedge swr) begin
-        if (!n_reset) begin end
-        else if (state == S_DONE && !busy) begin
-            res_h <= result_64[63:32];
-            res_l <= result_64[31:0];
+    /* ---------------- RESULT WRITE ---------------- */
+    always @(posedge swr or negedge n_reset) begin
+        if (!n_reset) begin
+            res_h <= 0;
+            res_l <= 0;
+        end else begin
+            if (state == S_DONE && !busy) begin
+                res_h <= result_64[63:32];
+                res_l <= result_64[31:0];
+            end
         end
     end
 
-    /* ------------- ODCZYT CPU ------------- */
+    /* ---------------- READ LOGIC ---------------- */
     always @(*) begin
         if (srd) begin
             case (saddress)
@@ -189,7 +193,7 @@ module gpioemu(
 
             endcase
         end else begin
-            sdata_out = 0;
+            sdata_out = 32'b0;
         end
     end
 
