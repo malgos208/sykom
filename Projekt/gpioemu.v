@@ -95,7 +95,7 @@ module gpioemu(
                     16'h00F0: arg2_h <= sdata_in;
                     16'h00F8: arg2_l <= sdata_in;
 
-                    16'h00D0: begin
+                    16'h0034: begin
                         ctrl_reg <= sdata_in;
                         if (sdata_in[0]) begin
                             state <= S_COMPUTE;
