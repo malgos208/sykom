@@ -2,6 +2,7 @@
 /* verilator lint_off UNDRIVEN */
 /* verilator lint_off MULTIDRIVEN */
 /* verilator lint_off COMBDLY */
+/* verilator lint_off SYNCASYNCNET */
 
 module gpioemu(
     input        n_reset,
