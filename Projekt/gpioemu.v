@@ -64,7 +64,7 @@ module gpioemu(
 
             /* DEBUG: każdy write ustawia te rejestry */
             ctrl_reg <= sdata_in;
-            status_reg <= 32'h12345678;
+            status_reg <= 32'hAAAAAAAA;
 
             /* dodatkowo zapisuj argumenty dla testu */
             case (saddress)
