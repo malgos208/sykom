@@ -7,7 +7,6 @@
 #include <linux/string.h>
 #include <linux/ctype.h>
 #include <linux/delay.h>
-#include <linux/slab.h>
 
 MODULE_INFO(intree, "Y");
 MODULE_LICENSE("GPL");
@@ -44,39 +43,8 @@ static void __iomem *baseptr;
 static struct proc_dir_entry *proc_dir;
 static struct proc_dir_entry *proc_a1, *proc_a2, *proc_ctrl, *proc_stat, *proc_res;
 
-/* 
- * Prosta konwersja string -> u64
- * Obsługuje liczby całkowite dodatnie
- */
-static int simple_strtou64(const char *str, u64 *val)
-{
-    u64 result = 0;
-    const char *p = str;
-    
-    while (isspace(*p)) p++;
-    
-    if (!isdigit(*p))
-        return -EINVAL;
-    
-    while (isdigit(*p)) {
-        if (result > (U64_MAX / 10))
-            return -ERANGE;
-        result = result * 10 + (*p - '0');
-        p++;
-    }
-    
-    while (isspace(*p)) p++;
-    
-    if (*p != '\0' && *p != '\n')
-        return -EINVAL;
-    
-    *val = result;
-    return 0;
-}
-
 /*
  * Konwersja stringa w formacie naukowym na format sprzętowy
- * Uproszczona wersja bez 64-bitowego dzielenia
  */
 static int parse_scientific(const char *buf, u64 *val)
 {
@@ -222,10 +190,11 @@ static int format_scientific(u64 val, char *buf, size_t len)
     }
 
     mant |= HIDDEN_BIT;
-    int exp2 = exp - EXP_BIAS;
     
-    /* Prosta konwersja - wypisujemy jako liczbę z wykładnikiem binarnym */
-    return snprintf(buf, len, "%s0x%llx", sign ? "-" : "+", mant);
+    /* Prosty format szesnastkowy do debugowania */
+    return snprintf(buf, len, "%s0x%llx", 
+                   sign ? "-" : "+", 
+                   mant);
 }
 
 static ssize_t a1stma_write(struct file *f, const char __user *ubuf, size_t c, loff_t *pos)
@@ -242,6 +211,7 @@ static ssize_t a1stma_write(struct file *f, const char __user *ubuf, size_t c, l
     if (parse_scientific(kbuf, &val))
         return -EINVAL;
     
+    pr_info("SYKOM: a1 = %s -> 0x%016llx\n", kbuf, val);
     writel(val >> 32, baseptr + OFF_ARG1_H);
     writel(val & 0xFFFFFFFF, baseptr + OFF_ARG1_L);
     return c;
@@ -261,6 +231,7 @@ static ssize_t a2stma_write(struct file *f, const char __user *ubuf, size_t c, l
     if (parse_scientific(kbuf, &val))
         return -EINVAL;
     
+    pr_info("SYKOM: a2 = %s -> 0x%016llx\n", kbuf, val);
     writel(val >> 32, baseptr + OFF_ARG2_H);
     writel(val & 0xFFFFFFFF, baseptr + OFF_ARG2_L);
     return c;
@@ -280,6 +251,8 @@ static ssize_t ctstma_write(struct file *f, const char __user *ubuf, size_t c, l
     if (kstrtou32(kbuf, 10, &cmd))
         return -EINVAL;
     
+    pr_info("SYKOM: ctrl = %u\n", cmd);
+    
     if (cmd == 1) {
         writel(1, baseptr + OFF_CTRL);
         udelay(10);
@@ -295,9 +268,11 @@ static ssize_t ststma_read(struct file *f, char __user *ubuf, size_t c, loff_t *
     u32 st = readl(baseptr + OFF_STATUS);
     const char *msg = "idle\n";
     
-    if (st & STATUS_BUSY)       msg = "busy\n";
-    else if (st & STATUS_DONE)  msg = "done\n";
+    if (st & STATUS_DONE)       msg = "done\n";
+    else if (st & STATUS_BUSY)  msg = "busy\n";
     else if (st & STATUS_ERROR) msg = "error\n";
+    
+    pr_info("SYKOM: status = 0x%08x -> %s", st, msg);
     
     return simple_read_from_buffer(ubuf, c, pos, msg, strlen(msg));
 }
@@ -309,7 +284,12 @@ static ssize_t restma_read(struct file *f, char __user *ubuf, size_t c, loff_t *
     u32 st = readl(baseptr + OFF_STATUS);
     
     if (!(st & STATUS_DONE)) {
-        len = snprintf(buf, sizeof(buf), "not ready\n");
+        if (st & STATUS_BUSY)
+            len = snprintf(buf, sizeof(buf), "busy\n");
+        else if (st & STATUS_ERROR)
+            len = snprintf(buf, sizeof(buf), "error\n");
+        else
+            len = snprintf(buf, sizeof(buf), "idle\n");
     } else {
         u32 hi = readl(baseptr + OFF_RES_H);
         u32 lo = readl(baseptr + OFF_RES_L);
@@ -318,6 +298,8 @@ static ssize_t restma_read(struct file *f, char __user *ubuf, size_t c, loff_t *
         buf[len++] = '\n';
         buf[len] = '\0';
     }
+    
+    pr_info("SYKOM: result = %s", buf);
     
     return simple_read_from_buffer(ubuf, c, pos, buf, len);
 }
@@ -349,12 +331,17 @@ static const struct file_operations res_fops = {
 
 static int __init sykom_init(void)
 {
+    pr_info("SYKOM: Initializing module\n");
+    
     baseptr = ioremap(SYKT_GPIO_BASE_ADDR, SYKT_GPIO_SIZE);
-    if (!baseptr)
+    if (!baseptr) {
+        pr_err("SYKOM: ioremap failed\n");
         return -ENOMEM;
+    }
 
     proc_dir = proc_mkdir("sykom", NULL);
     if (!proc_dir) {
+        pr_err("SYKOM: proc_mkdir failed\n");
         iounmap(baseptr);
         return -ENOMEM;
     }
@@ -366,6 +353,7 @@ static int __init sykom_init(void)
     proc_res = proc_create("restma", 0444, proc_dir, &res_fops);
 
     if (!proc_a1 || !proc_a2 || !proc_ctrl || !proc_stat || !proc_res) {
+        pr_err("SYKOM: proc_create failed\n");
         remove_proc_entry("a1stma", proc_dir);
         remove_proc_entry("a2stma", proc_dir);
         remove_proc_entry("ctstma", proc_dir);
@@ -377,12 +365,13 @@ static int __init sykom_init(void)
     }
 
     writel(0, baseptr + OFF_CTRL);
-    pr_info("SYKOM module loaded\n");
+    pr_info("SYKOM: Module loaded successfully\n");
     return 0;
 }
 
 static void __exit sykom_cleanup(void)
 {
+    pr_info("SYKOM: Cleaning up\n");
     writel(SYKT_EXIT | ((SYKT_EXIT_CODE) << 16), baseptr);
     remove_proc_entry("a1stma", proc_dir);
     remove_proc_entry("a2stma", proc_dir);
@@ -391,7 +380,7 @@ static void __exit sykom_cleanup(void)
     remove_proc_entry("restma", proc_dir);
     remove_proc_entry("sykom", NULL);
     iounmap(baseptr);
-    pr_info("SYKOM module unloaded\n");
+    pr_info("SYKOM: Module unloaded\n");
 }
 
 module_init(sykom_init);
